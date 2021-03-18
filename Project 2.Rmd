@@ -1,0 +1,374 @@
+---
+title: "Final Project"
+author: "Avery Neims"
+date: "3/16/2021"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+
+#In the below Chunk please find the data being uploaded into the global enivronment. I am also omitting all NA's within the dataset and setting the Id column within BreastCancer to Null.
+```{r}
+
+#load the mlbench package which has the BreastCancer data set
+require(mlbench)
+
+# if you don't have any required package, use the install.packages() command
+# load the data set
+data(BreastCancer)
+# some algorithms don't like missing values, so remove rows with missing values
+BreastCancer <- na.omit(BreastCancer) 
+# remove the unique identifier, which is useless and would confuse the machine learning algorithms
+BreastCancer$Id <- NULL
+```
+
+#In the chunk below I will be partitioning my data and creating a model using recursive partitioning with my training data set. 
+```{r}
+# partition the data set for 80% training and 20% evaluation
+set.seed(2)
+
+ind <- sample(2, nrow(BreastCancer), replace = TRUE, prob=c(0.8, 0.2))
+
+# create model using recursive partitioning on the training data set
+require(rpart)
+x.rp <- rpart(Class ~ ., data=BreastCancer[ind == 1,])
+# predict classes for the evaluation data set
+x.rp.pred <- predict(x.rp, type="class", newdata=BreastCancer[ind == 2,])
+# score the evaluation data set (extract the probabilities)
+x.rp.prob <- predict(x.rp, type="prob", newdata=BreastCancer[ind == 2,])
+
+# To view the decision tree, uncomment this line.
+plot(x.rp, main="Decision tree created using rpart")
+```
+
+#Now i will be creating a model using conditional inference trees
+```{r}
+# create model using conditional inference trees
+require(party)
+x.ct <- ctree(Class ~ ., data=BreastCancer[ind == 1,])
+x.ct.pred <- predict(x.ct, newdata=BreastCancer[ind == 2,])
+x.ct.prob <-  1- unlist(treeresponse(x.ct, BreastCancer[ind == 2,]), use.names=F)[seq(1,nrow(BreastCancer[ind == 2,])*2,2)]
+
+# To view the decision tree, uncomment this line.
+plot(x.ct, main="Decision tree created using condition inference trees")
+```
+
+#THis is the random forest model and we are using the bagging enseble for conditional inference trees
+```{r}
+x.cf <- cforest(Class ~ ., data=BreastCancer[ind == 1,], control = cforest_unbiased(mtry = ncol(BreastCancer)-2))
+x.cf.pred <- predict(x.cf, newdata=BreastCancer[ind == 2,])
+x.cf.prob <-  1- unlist(treeresponse(x.cf, BreastCancer[ind == 2,]), use.names=F)[seq(1,nrow(BreastCancer[ind == 2,])*2,2)]
+```
+
+# create model using bagging (bootstrap aggregating)
+```{r}
+
+require(ipred)
+x.ip <- bagging(Class ~ ., data=BreastCancer[ind == 1,])
+x.ip.prob <- predict(x.ip, type="prob", newdata=BreastCancer[ind == 2,])
+```
+
+
+```{r}
+# create model using svm (support vector machine)
+require(e1071)
+
+# svm requires tuning
+x.svm.tune <- tune(svm, Class~., data = BreastCancer[ind == 1,],
+                   ranges = list(gamma = 2^(-8:1), cost = 2^(0:4)),
+                   tunecontrol = tune.control(sampling = "fix"))
+# display the tuning results (in text format)
+x.svm.tune
+# If the tuning results are on the margin of the parameters (e.g., gamma = 2^-8), 
+# then widen the parameters.
+# I manually copied the cost and gamma from console messages above to parameters below.
+x.svm <- svm(Class~., data = BreastCancer[ind == 1,], cost=4, gamma=0.0625, probability = TRUE)
+x.svm.prob <- predict(x.svm, type="prob", newdata=BreastCancer[ind == 2,], probability = TRUE)
+
+
+##
+## plot ROC curves to compare the performance of the individual classifiers
+##
+
+# Output the plot to a PNG file for display on web.  To draw to the screen, 
+# comment this line out.
+png(filename="roc_curve_5_models.png", width=700, height=700)
+
+# load the ROCR package which draws the ROC curves
+require(ROCR)
+```
+
+# create an ROCR prediction object from rpart() probabilities. I will now be taking the models and comparing the performances of them in a line chart. I show this by making a legend with in the graph and labeling these as different colors. 
+
+```{r}
+x.rp.prob.rocr <- prediction(x.rp.prob[,2], BreastCancer[ind == 2,'Class'])
+# prepare an ROCR performance object for ROC curve (tpr=true positive rate, fpr=false positive rate)
+x.rp.perf <- performance(x.rp.prob.rocr, "tpr","fpr")
+# plot it
+plot(x.rp.perf, col=2, main="ROC curves comparing classification performance of five machine learning models")
+
+# Draw a legend.
+legend(0.6, 0.6, c('rpart', 'ctree', 'cforest','bagging','svm'), 2:6)
+
+# ctree
+x.ct.prob.rocr <- prediction(x.ct.prob, BreastCancer[ind == 2,'Class'])
+x.ct.perf <- performance(x.ct.prob.rocr, "tpr","fpr")
+# add=TRUE draws on the existing chart 
+plot(x.ct.perf, col=3, add=TRUE)
+
+
+# cforest
+x.cf.prob.rocr <- prediction(x.cf.prob, BreastCancer[ind == 2,'Class'])
+x.cf.perf <- performance(x.cf.prob.rocr, "tpr","fpr")
+plot(x.cf.perf, col=4, add=TRUE)
+
+# bagging
+x.ip.prob.rocr <- prediction(x.ip.prob[,2], BreastCancer[ind == 2,'Class'])
+x.ip.perf <- performance(x.ip.prob.rocr, "tpr","fpr")
+plot.new()
+plot(x.ip.perf, col=5, add=TRUE)
+# svm
+x.svm.prob.rocr <- prediction(attr(x.svm.prob, "probabilities")[,2], BreastCancer[ind == 2,'Class'])
+x.svm.perf <- performance(x.svm.prob.rocr, "tpr","fpr")
+
+plot(x.svm.perf, col=6, add=TRUE)
+
+# Close and save the PNG file.
+dev.off()
+
+```
+Below you can see that I am importing breastcancer again, this is essentiall starting with a different/new data set from the one previously worked on. For this reason I needed to do the compile.cases process to ensure that there are no NAs in the model. 
+
+I am also binding the rows/columns that we are working with. 
+```{r}
+data("BreastCancer")
+BreastCancer <- BreastCancer[complete.cases(BreastCancer), ]
+
+mydata <- cbind(BreastCancer[10],BreastCancer[1:9])
+```
+
+Below I run my first model on the breastcancer dataset. This Model is the Support Vector Machine. SVM is primarily used for pattern recognition, regression and distribution estimation.
+```{r}
+library(e1071)
+mysvm <- svm(BreastCancer$Class ~ ., BreastCancer)
+mysvm.pred <- predict(mysvm, BreastCancer)
+table(mysvm.pred,BreastCancer$Class)
+
+#install.packages("klaR")
+
+
+```
+
+I began running into some issues regarding my data, so I broke all of my columns up and counted the NA's within the data set. I found that there was one column that showed NA's.I then solved this in the first chunk, which we review already. 
+```{r}
+
+#View(BreastCancer)
+
+sum(complete.cases(BreastCancer))
+sum(!complete.cases(BreastCancer))
+
+sum(is.na(BreastCancer$Class))
+sum(is.na(BreastCancer$Id))
+sum(is.na(BreastCancer$Cl.thickness))
+sum(is.na(BreastCancer$Cell.size))
+sum(is.na(BreastCancer$Marg.adhesion))
+sum(is.na(BreastCancer$Epith.c.size))
+sum(is.na(BreastCancer$Bare.nuclei))
+sum(is.na(BreastCancer$Bl.cromatin))
+sum(is.na(BreastCancer$Mitoses))
+
+```
+Find the NaiveBayes Model ran on the BreastCancer data set. This is primarily used to predict the probability of different class based on various attributes.
+```{r}
+library(klaR)
+mynb <- NaiveBayes(Class ~ ., BreastCancer)
+mynb.pred <- predict(mynb,BreastCancer)
+table(mynb.pred$class,BreastCancer$Class)
+
+```
+
+Below you can find the neural net model ran on the BreastCancer data set. The neural net model is used to help cluster and classify data. THey also help to group unlabeled data according to similarities of inputs. 
+```{r}
+library(nnet)
+mynnet <- nnet(Class ~ ., BreastCancer, size=1)
+mynnet.pred <- predict(mynnet,BreastCancer,type="class")
+table(mynnet.pred,BreastCancer$Class)
+
+library(MASS)
+str(mynnet.pred)
+```
+```{r}
+head(BreastCancer)
+```
+#Below is the Decision tree model
+#below find the decision tree with all variables except for the ID variable as it will not add very much value to the model and it also took away from the visuals. 
+
+```{r}
+
+library(rpart)
+mytree <- rpart(Class ~ Cell.size+Cell.shape+Bare.nuclei
++Cl.thickness+Normal.nucleoli+Epith.c.size+Bl.cromatin
++Mitoses
+, BreastCancer)
+plot(mytree); text(mytree) # in "iris_tree.ps"
+summary(mytree)
+mytree.pred <- predict(mytree,BreastCancer,type="class")
+table(mytree.pred,BreastCancer$Class)
+
+```
+
+# Leave-1-Out Cross Validation (LOOCV)
+#When I was running this I kept running into this error-Error in model.frame.default(Terms, newdata, na.action = na.action, xlev = attr(object, : factor Id has new level 1000025.
+
+#similarly to the model above, I am going to remove ID from the model. 
+
+```{r}
+
+BreastCancer <- subset(BreastCancer, select = -c(1))
+
+ans <- numeric(length(BreastCancer[,1]))
+for (i in 1:length(BreastCancer[,1])) {
+  mytree <- rpart(Class ~ ., BreastCancer[-i,])
+  mytree.pred <- predict(mytree,BreastCancer[i,],type="class")
+  ans[i] <- mytree.pred
+}
+ans <- factor(ans,labels=levels(BreastCancer$Class))
+table(ans,BreastCancer$Class)
+# The same as above in this case
+```
+#Quadratic Discriminant Analysis
+Below you will find the quadratic Discriminant analysis, this is used to determine which variables in the model discriminate between two or more naturally. 
+
+```{r}
+
+library(MASS)
+BreastCancer$Cl.thickness <- as.numeric(BreastCancer$Cl.thickness)
+BreastCancer$Cell.size <- as.numeric(BreastCancer$Cell.size)
+BreastCancer$Cell.shape <- as.numeric(BreastCancer$Cell.shape)
+BreastCancer$Marg.adhesion <- as.numeric(BreastCancer$Marg.adhesion)
+BreastCancer$Epith.c.size <- as.numeric(BreastCancer$Epith.c.size)
+BreastCancer$Bare.nuclei <- as.numeric(BreastCancer$Bare.nuclei)
+BreastCancer$Bl.cromatin <- as.numeric(BreastCancer$Bl.cromatin)
+BreastCancer$Normal.nucleoli <- as.numeric(BreastCancer$Normal.nucleoli)
+BreastCancer$Mitoses <- as.numeric(BreastCancer$Mitoses)
+BreastCancer$Class <- as.factor(BreastCancer$Class)
+str(BreastCancer)
+summary(BreastCancer)
+myqda <- qda(Class ~ ., BreastCancer)
+myqda.pred <- predict(myqda, BreastCancer)
+table(myqda.pred$class,BreastCancer$Class)
+
+```
+
+# in the below chunk you will find the Regularised Discriminant Analysis Similar to the model above this, this is made to discover variables that discriminate between each other. 
+
+```{r}
+
+library(klaR)
+myrda <- rda(Class ~ ., BreastCancer)
+myrda.pred <- predict(myrda, BreastCancer)
+table(myrda.pred$class,BreastCancer$Class)
+
+```
+#Here is the Random Forests model below
+
+```{r}
+
+library(randomForest)
+myrf <- randomForest(Class ~ .,BreastCancer)
+myrf.pred <- predict(myrf, BreastCancer)
+table(myrf.pred, BreastCancer$Class)
+
+
+```
+below you will find a list of taking the findings/outputs from all of the models and turning them into classifiers. This was very wrong and should be ignored. 
+```{r}
+
+#
+
+# Classifier 1 output
+#benign       427        11
+#malignant     17       228
+
+classifier1<- c(427,11,17,228)
+
+#            benign malignant
+#  benign       431         2
+#  malignant     13       237
+
+classifier2<-c(431,2,13,237)
+
+#mynnet.pred benign malignant
+ # benign       437         2
+ # malignant      7       237
+ 
+classifier3<-c(437,2,7,237)
+
+#mytree.pred benign malignant
+ # benign       431         9
+ # malignant     13       230
+ 
+classifier4<-c(431,9,13,230)
+
+#ans         benign malignant
+#  benign       430        20
+#  malignant     14       219
+
+classifier5<-c(430,20,14,219)
+
+#    benign malignant
+# benign       422         6
+# malignant     22       233
+classifier6<-c(422,6,22,233)
+
+
+  #benign malignant
+  #benign       433         9
+  #malignant     11       230
+
+classifier7<-c(433,9,11,230)
+
+#myrf.pred   benign malignant
+ # benign       444         0
+  #malignant      0       239
+
+classifier8<-c(444,0,0,239)
+
+#combine.df
+```
+
+This chunk shows the diferent types of data within the data.
+
+
+```{r}
+#str(combine.classes)
+```
+This chunk will outline the right approach and answer associated with the combination of all the models. This is useing the ensemble method. 
+
+```{r}
+combine.classes<-data.frame(myrf.pred, myrda.pred$class,#myqda.pred,
+mytree.pred,mynnet.pred,mysvm.pred, mynb.pred$class)
+head(combine.classes)
+head(myrf.pred)
+head(myrda.pred)
+combine.classes$myrf.pred<-ifelse(combine.classes$myrf.pred=="benign", 0, 1)
+combine.classes[,2]<-ifelse(combine.classes[,2]=="benign", 0, 1)
+combine.classes[,3]<-ifelse(combine.classes[,3]=="benign", 0, 1)
+combine.classes[,4]<-ifelse(combine.classes[,4]=="benign", 0, 1)
+combine.classes[,5]<-ifelse(combine.classes[,5]=="benign", 0, 1)
+combine.classes[,6]<-ifelse(combine.classes[,6]=="benign", 0, 1)
+majority.vote=rowSums(combine.classes)
+head(majority.vote)
+combine.classes[,7]<-rowSums(combine.classes)
+combine.classes[,8]<-ifelse(combine.classes[,7]>=4, "malignant", "benign")
+table(combine.classes[,8], BreastCancer$Class)
+```
+
